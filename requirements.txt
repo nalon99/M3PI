@@ -1,9 +1,13 @@
 # LangChain packages (Python 3.13 compatible)
-langchain>=0.3.0,<1.0.0  # Main LangChain package (includes agents, memory, chains) - pin to 0.x for AgentExecutor compatibility
-langchain-core>=0.3.0  # Core LangChain functionality
-langchain-openai>=0.2.0
-langchain-huggingface>=0.1.0
-langchain-community>=0.3.0
+# Note: AgentExecutor and create_openai_functions_agent were removed in LangChain 1.0.0
+# Pinning to 0.0.350 (version with AgentExecutor in langchain.agents)
+# IMPORTANT: Use OpenAIFunctionsAgent.from_llm_and_tools() instead of create_openai_functions_agent()
+langchain==0.0.350  # Main LangChain package with AgentExecutor support
+langchain-core==0.1.23  # Core LangChain functionality (compatible with 0.0.350)
+langchain-openai>=0.0.5  # OpenAI integration (compatible with 0.0.350)
+# Note: langchain-huggingface is not compatible with langchain 0.0.350
+# Using HuggingFaceEmbeddings from langchain.embeddings.huggingface instead
+langchain-community==0.0.10  # Community integrations (compatible with 0.0.350)
 
 # Vector store and embeddings (Python 3.13 compatible)
 faiss-cpu>=1.8.0  # Updated for Python 3.13 support
@@ -18,6 +22,7 @@ langfuse>=2.50.0  # Updated for Python 3.13 support
 # Environment variables
 python-dotenv>=1.0.1
 
-# Core dependencies (Python 3.13 compatible)
-numpy>=2.0.0  # NumPy 2.x supports Python 3.13
+# Core dependencies
+# Note: langchain 0.0.350 requires numpy<2, so we use numpy 1.x for compatibility
+numpy>=1.24.0,<2.0.0  # NumPy 1.x for compatibility with langchain 0.0.350
 

@@ -9,12 +9,43 @@ Contains common RAG logic: retrieval, generation, formatting, and error handling
 # ============================================================================
 from abc import ABC, abstractmethod
 from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
+# Import HuggingFaceEmbeddings - use direct module import to avoid __init__.py issues
+import importlib.util
+import sys
+import os
+
+# Find langchain package path
+langchain_path = None
+for p in sys.path:
+    test_path = os.path.join(p, 'langchain', 'embeddings', 'huggingface.py')
+    if os.path.exists(test_path):
+        langchain_path = p
+        break
+
+if langchain_path:
+    # Direct import from file to bypass __init__.py
+    spec = importlib.util.spec_from_file_location(
+        "huggingface_embeddings",
+        os.path.join(langchain_path, 'langchain', 'embeddings', 'huggingface.py')
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    HuggingFaceEmbeddings = module.HuggingFaceEmbeddings
+else:
+    # Fallback: try normal import
+    try:
+        from langchain.embeddings.huggingface import HuggingFaceEmbeddings
+    except ImportError:
+        try:
+            from langchain_huggingface import HuggingFaceEmbeddings
+        except ImportError:
+            raise ImportError("Could not import HuggingFaceEmbeddings. Please install langchain or langchain-huggingface.")
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain_community.vectorstores import FAISS
 from langchain_core.retrievers import BaseRetriever
-from langfuse.decorators import langfuse_context, observe
+from langfuse import observe
+# langfuse_context may not be available in this version, will handle if needed
 from typing import Dict, List, Optional, Any, Literal
 import json
 import logging
@@ -251,7 +282,8 @@ class RAGAgent(ABC):
             self.logger.info(f"Processing query: {query_text[:100]}...")
             
             # Create span for retrieval and generation (RetrievalQA does both)
-            retrieval_span = self.langfuse_client.span(
+            # Note: In Langfuse 3.x, use start_span() instead of span()
+            retrieval_span = self.langfuse_client.start_span(
                 name=f"{self.agent_name}_retrieval_and_generation",
                 metadata={
                     "agent": self.agent_name,
@@ -264,8 +296,9 @@ class RAGAgent(ABC):
             try:
                 # Use RetrievalQA chain - handles both retrieval and generation
                 # This avoids duplicate retrieval (chain already does retrieval internally)
-                with retrieval_span:
-                    result = self.qa_chain.invoke({"query": query_text})
+                # Note: In Langfuse 3.x, spans don't support context manager protocol
+                # We'll manually track and end the span
+                result = self.qa_chain.invoke({"query": query_text})
                 
                 # Extract answer and source documents from chain result
                 answer = result.get("result", "")
@@ -273,20 +306,23 @@ class RAGAgent(ABC):
                 
                 # Check if we got results
                 if not answer:
-                    retrieval_span.end(
+                    # Note: In Langfuse 3.x, use update() to set output and level, then end()
+                    retrieval_span.update(
                         output="No answer generated",
                         level="ERROR",
                         metadata={"error": "Empty answer from chain"}
                     )
+                    retrieval_span.end()
                     return self.handle_retrieval_error(query_text)
                 
                 if not retrieved_docs:
                     self.logger.warning(f"No documents retrieved for query: {query_text[:100]}...")
-                    retrieval_span.end(
+                    retrieval_span.update(
                         output=answer[:200],
                         level="WARNING",
                         metadata={"warning": "No documents retrieved", "answer_length": len(answer)}
                     )
+                    retrieval_span.end()
                 else:
                     # Log successful retrieval and generation
                     self.logger.info(f"Retrieved {len(retrieved_docs)} documents for {self.agent_name} agent")
@@ -295,8 +331,8 @@ class RAGAgent(ABC):
                     # Extract document metadata for debugging
                     doc_sources = [doc.metadata.get("source", "unknown") for doc in retrieved_docs[:3]]
                     
-                    # End span with success details
-                    retrieval_span.end(
+                    # Update span with success details, then end it
+                    retrieval_span.update(
                         output=answer[:200],
                         level="DEFAULT",
                         metadata={
@@ -306,27 +342,31 @@ class RAGAgent(ABC):
                             "agent": self.agent_name
                         }
                     )
+                    retrieval_span.end()
                 
             except Exception as chain_error:
                 # Log chain invocation error
-                retrieval_span.end(
+                retrieval_span.update(
                     output=f"Error: {str(chain_error)}",
                     level="ERROR",
                     metadata={"error": str(chain_error), "agent": self.agent_name}
                 )
+                retrieval_span.end()
                 raise
             
             # Update trace with overall metadata
+            # Note: In Langfuse 3.x, use langfuse_client.update_current_trace() instead of langfuse_context
             context_text = "\n\n".join([doc.page_content for doc in retrieved_docs]) if retrieved_docs else ""
-            langfuse_context.update_current_trace(
-                metadata={
-                    "retrieved_docs_count": len(retrieved_docs),
-                    "answer_length": len(answer),
-                    "context_length": len(context_text),
-                    "agent": self.agent_name,
-                    "query": query_text[:200]
-                }
-            )
+            if self.langfuse_client:
+                self.langfuse_client.update_current_trace(
+                    metadata={
+                        "retrieved_docs_count": len(retrieved_docs),
+                        "answer_length": len(answer),
+                        "context_length": len(context_text),
+                        "agent": self.agent_name,
+                        "query": query_text[:200]
+                    }
+                )
             
             # Format response
             response = self.format_response(

@@ -261,7 +261,8 @@ class EvaluatorAgent:
             }
             
             # Create score via Langfuse SDK
-            self.langfuse_client.score(**score_data)
+            # Note: In Langfuse 3.x, use create_score() instead of score()
+            self.langfuse_client.create_score(**score_data)
             
         except Exception as e:
             self.logger.warning(f"[EVALUATOR] Failed to log evaluation to Langfuse: {str(e)}")

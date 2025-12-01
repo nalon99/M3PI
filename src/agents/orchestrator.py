@@ -26,7 +26,19 @@ from langchain_openai import ChatOpenAI
 import uuid
 from langchain_core.tools import Tool
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
-from langchain.agents import AgentExecutor, create_openai_functions_agent
+
+# Import AgentExecutor and OpenAIFunctionsAgent
+# Note: In langchain 0.0.350, we use OpenAIFunctionsAgent.from_llm_and_tools() instead of create_openai_functions_agent()
+try:
+    from langchain.agents import AgentExecutor
+    from langchain.agents.openai_functions_agent.base import OpenAIFunctionsAgent
+except ImportError:
+    raise ImportError(
+        "Could not import AgentExecutor or OpenAIFunctionsAgent. "
+        "Please ensure you have a compatible version of LangChain installed (langchain==0.0.350). "
+        "Try: uv pip install 'langchain==0.0.350'"
+    )
+
 from langchain.memory import ConversationBufferMemory
 
 # Import Langfuse for tracing
@@ -141,16 +153,31 @@ class OrchestratorAgent(ABC):
             enable_evaluation: Whether to enable automatic evaluation (default: False)
         """
         # Initialize LLM
-        api_key = os.getenv("OPENAI_API_KEY")
         use_open_router = os.getenv("USE_OPEN_ROUTER", "false").lower() == "true"
         if use_open_router:
+            # For Open Router, use OPENAI_API_KEY as the Open Router API key
+            # Open Router API key should be set in OPENAI_API_KEY or OPENROUTER_API_KEY
+            api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError(
+                    "Open Router requires an API key. Set OPENROUTER_API_KEY or OPENAI_API_KEY environment variable."
+                )
             self.llm = ChatOpenAI(
                 temperature=0,
                 openai_api_key=api_key,
                 base_url="https://openrouter.ai/api/v1",
-                model_name="openai/gpt-4o-mini"
+                model_name="openai/gpt-4o-mini",
+                # Open Router requires HTTP Referer header for some models
+                default_headers={
+                    "HTTP-Referer": os.getenv("OPENROUTER_REFERER", "https://github.com/your-repo"),  # Optional
+                    "X-Title": os.getenv("OPENROUTER_TITLE", "Multi-Agent RAG System")  # Optional
+                }
             )
         else:
+            # Standard OpenAI API
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise ValueError("OPENAI_API_KEY environment variable is required for OpenAI API.")
             self.llm = ChatOpenAI(
                 temperature=0,
                 openai_api_key=api_key,
@@ -180,21 +207,56 @@ class OrchestratorAgent(ABC):
             return_messages=True
         )
         
-        # Create the agent using OPENAI_FUNCTIONS
-        self.agent = create_openai_functions_agent(
-            llm=self.llm,
-            tools=self.tools,
-            prompt=self.prompt
-        )
+        # Create the agent and executor
+        # Note: Open Router doesn't support the deprecated "functions" format used by OpenAIFunctionsAgent
+        # When using Open Router, we use STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION instead
+        use_open_router = os.getenv("USE_OPEN_ROUTER", "false").lower() == "true"
         
-        # Create agent executor
-        self.agent_executor = AgentExecutor(
-            agent=self.agent,
-            tools=self.tools,
-            memory=self.memory,
-            verbose=True,
-            handle_parsing_errors=True
-        )
+        if use_open_router:
+            # For Open Router: Use ReAct agent with structured chat (supports tools format, not functions)
+            from langchain.agents import initialize_agent, AgentType
+            
+            # initialize_agent returns an AgentExecutor directly
+            # This uses the tools format which Open Router supports
+            self.agent_executor = initialize_agent(
+                tools=self.tools,
+                llm=self.llm,
+                agent=AgentType.STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION,
+                verbose=True,
+                memory=self.memory,
+                handle_parsing_errors=True,
+                max_iterations=5  # Limit iterations to prevent infinite loops
+            )
+            # Extract the agent for reference (though we use agent_executor directly)
+            self.agent = self.agent_executor.agent if hasattr(self.agent_executor, 'agent') else None
+        else:
+            # For OpenAI: Use OpenAIFunctionsAgent (supports functions format)
+            # In langchain 0.0.350, we use OpenAIFunctionsAgent.from_llm_and_tools()
+            # Extract system message from prompt for OpenAIFunctionsAgent
+            system_message = None
+            if hasattr(self.prompt, 'messages') and len(self.prompt.messages) > 0:
+                # Get system message from ChatPromptTemplate
+                for msg in self.prompt.messages:
+                    if isinstance(msg, tuple) and msg[0] == "system":
+                        from langchain_core.messages import SystemMessage
+                        system_message = SystemMessage(content=msg[1])
+                        break
+            
+            self.agent = OpenAIFunctionsAgent.from_llm_and_tools(
+                llm=self.llm,
+                tools=self.tools,
+                system_message=system_message
+            )
+            
+            # Create agent executor for OpenAI
+            self.agent_executor = AgentExecutor(
+                agent=self.agent,
+                tools=self.tools,
+                memory=self.memory,
+                verbose=True,
+                handle_parsing_errors=True,
+                max_iterations=5  # Limit iterations to prevent infinite loops
+            )
         
         # Track delegation history (to prevent duplicate handling)
         self.delegation_history = []
@@ -236,7 +298,8 @@ class OrchestratorAgent(ABC):
                 str: Answer from the agent
             """
             # Track agent selection in Langfuse
-            tool_span = self.langfuse.span(
+            # Note: In Langfuse 3.x, use start_span() instead of span()
+            tool_span = self.langfuse.start_span(
                 name=f"{agent.agent_name}_selected",
                 metadata={
                     "agent": agent.agent_name,
@@ -258,20 +321,37 @@ class OrchestratorAgent(ABC):
                 }
                 
                 # Process query through agent
-                with tool_span:
+                # Note: In Langfuse 3.x, spans don't support context manager protocol
+                # We'll manually track and end the span
+                try:
                     response = agent.process_query(query_data)
-                
-                # Extract answer from response
-                answer = response.get("answer", f"I couldn't process your {agent.agent_name} query.")
-                
-                # Update span with success
-                tool_span.end(output=answer[:200], level="DEFAULT")
-                self.logger.info(f"[ROUTING RESULT] {agent.agent_name} completed successfully")
-                
-                return answer
+                    
+                    # Extract answer from response
+                    answer = response.get("answer", f"I couldn't process your {agent.agent_name} query.")
+                    
+                    # Update span with success, then end it
+                    # Note: In Langfuse 3.x, use update() to set output and level, then end()
+                    tool_span.update(output=answer[:200], level="DEFAULT")
+                    tool_span.end()
+                    self.logger.info(f"[ROUTING RESULT] {agent.agent_name} completed successfully")
+                    
+                    return answer
+                except Exception as e:
+                    error_msg = f"Error processing {agent.agent_name} query: {str(e)}"
+                    # Update span with error, then end it
+                    tool_span.update(output=error_msg, level="ERROR")
+                    tool_span.end()
+                    self.logger.error(f"[ROUTING ERROR] {agent.agent_name} failed: {str(e)}")
+                    raise  # Re-raise to be caught by outer exception handler
             except Exception as e:
+                # Ensure span is ended even if there's an error
+                if tool_span:
+                    try:
+                        tool_span.update(output=f"Error: {str(e)}", level="ERROR")
+                        tool_span.end()
+                    except:
+                        pass  # Ignore errors ending span
                 error_msg = f"Error processing {agent.agent_name} query: {str(e)}"
-                tool_span.end(output=error_msg, level="ERROR")
                 self.logger.error(f"[ROUTING ERROR] {agent.agent_name} failed: {str(e)}")
                 return error_msg
         
@@ -420,8 +500,9 @@ class OrchestratorAgent(ABC):
         run_id = str(uuid.uuid4())
         
         try:
-            # Create top-level Langfuse trace for this routing operation
-            trace = self.langfuse.trace(
+            # Create top-level Langfuse span for this routing operation
+            # Note: In Langfuse 3.x, use start_span() instead of trace()
+            trace = self.langfuse.start_span(
                 name="orchestrator_route_query",
                 metadata={
                     "query": query[:200],  # Truncate for metadata
@@ -445,13 +526,15 @@ class OrchestratorAgent(ABC):
             # 1. Use LLM to analyze query and select tool
             # 2. Invoke the selected tool (which creates a span in Langfuse)
             # 3. Return the agent's response
-            with trace.span(
+            # Note: In Langfuse 3.x, start_as_current_span() returns a context manager
+            # Use it with 'with' statement - it automatically handles span lifecycle
+            with trace.start_as_current_span(
                 name="agent_executor_invoke",
                 metadata={
                     "run_id": run_id,
                     "query": query[:200]
                 }
-            ) as executor_span:
+            ):
                 # process query through agent executor
                 result = self.agent_executor.invoke(
                     {"input": query},
@@ -461,9 +544,15 @@ class OrchestratorAgent(ABC):
             # Extract the answer from the result
             answer = result.get("output", "I couldn't process your query.")
             
-            # Determine which agent was selected by checking Langfuse spans
-            # (The tool wrapper already created a span, but we can also check the result)
+            # Determine which agent was selected by checking the result
+            # First try to extract from intermediate steps, then fallback to other methods
             selected_agent = self._extract_selected_agent_from_result(result)
+            
+            # If still unknown, try deep inspection as fallback
+            if selected_agent == "unknown":
+                selected_agent = self._extract_selected_agent_from_result(result, use_deep_inspection=True)
+                if selected_agent != "unknown":
+                    self.logger.info(f"[ORCHESTRATOR] Agent determined via deep inspection: {selected_agent}")
             
             # Check for handoff cycles before tracking
             is_cycle, cycle_reason = self._check_handoff_cycle(query, selected_agent)
@@ -506,6 +595,7 @@ class OrchestratorAgent(ABC):
             # Evaluate response quality (if evaluator is enabled)
             if self.enable_evaluation and self.evaluator:
                 try:
+                    self.logger.info("[ORCHESTRATOR] Running quality evaluation...")
                     evaluation = self.evaluator.evaluate_response(
                         query=query,
                         answer=answer,
@@ -516,21 +606,35 @@ class OrchestratorAgent(ABC):
                         }
                     )
                     
+                    # Log evaluation results
+                    overall_score = evaluation.get("overall_score", 0)
+                    relevance = evaluation.get("relevance", {}).get("score", 0)
+                    accuracy = evaluation.get("accuracy", {}).get("score", 0)
+                    completeness = evaluation.get("completeness", {}).get("score", 0)
+                    is_acceptable = evaluation.get("is_acceptable", False)
+                    
+                    status = "✓ ACCEPTABLE" if is_acceptable else "✗ LOW QUALITY"
+                    self.logger.info(
+                        f"[ORCHESTRATOR] Evaluation Result: {status} - "
+                        f"Overall: {overall_score:.1f}/10 "
+                        f"(Relevance: {relevance}, Accuracy: {accuracy}, Completeness: {completeness})"
+                    )
+                    
                     # Update trace with evaluation results
                     existing_metadata = trace.metadata if hasattr(trace, 'metadata') else {}
                     evaluation_metadata = {
-                        "evaluation_overall_score": evaluation.get("overall_score", 0),
-                        "evaluation_relevance": evaluation.get("relevance", {}).get("score", 0),
-                        "evaluation_accuracy": evaluation.get("accuracy", {}).get("score", 0),
-                        "evaluation_completeness": evaluation.get("completeness", {}).get("score", 0),
-                        "evaluation_acceptable": evaluation.get("is_acceptable", False)
+                        "evaluation_overall_score": overall_score,
+                        "evaluation_relevance": relevance,
+                        "evaluation_accuracy": accuracy,
+                        "evaluation_completeness": completeness,
+                        "evaluation_acceptable": is_acceptable
                     }
                     trace.update(metadata={**existing_metadata, **evaluation_metadata})
                     
                     # Check if response should be rejected due to low quality
                     if self.evaluator.should_reject_response(evaluation):
                         self.logger.warning(
-                            f"[ORCHESTRATOR] Low quality response detected (score: {evaluation.get('overall_score', 0):.1f}/10). "
+                            f"[ORCHESTRATOR] Low quality response detected (score: {overall_score:.1f}/10). "
                             f"Consider improving the answer or retrieval."
                         )
                         # Optionally: You could return a modified response or flag here
@@ -538,7 +642,12 @@ class OrchestratorAgent(ABC):
                     
                 except Exception as eval_error:
                     self.logger.warning(f"[ORCHESTRATOR] Evaluation failed: {str(eval_error)}")
+                    import traceback
+                    self.logger.debug(traceback.format_exc())
                     # Continue even if evaluation fails
+            
+            # End the trace successfully
+            trace.end()
             
             return answer
             
@@ -548,16 +657,18 @@ class OrchestratorAgent(ABC):
             self.logger.exception("Full error traceback:")
             
             # Log error to Langfuse
-            error_trace = self.langfuse.trace(
+            # Note: In Langfuse 3.x, use start_span() instead of trace()
+            error_trace = self.langfuse.start_span(
                 name="orchestrator_route_query_error",
                 metadata={
                     "query": query[:200],
                     "error": str(e),
                     "run_id": run_id,
                     "timestamp": datetime.now().isoformat()
-                }
+                },
+                level="ERROR"
             )
-            error_trace.end(level="ERROR")
+            error_trace.end()
             
             return f"I encountered an error while processing your query. Please try again or rephrase your question. Error: {str(e)}"
     
@@ -661,7 +772,7 @@ class OrchestratorAgent(ABC):
         if len(self.handoff_history) > 50:
             self.handoff_history = self.handoff_history[-50:]
     
-    def _extract_selected_agent_from_result(self, result: Dict[str, Any]) -> str:
+    def _extract_selected_agent_from_result(self, result: Dict[str, Any], use_deep_inspection: bool = False) -> str:
         """
         Extract which agent was selected from the AgentExecutor result.
         
@@ -670,27 +781,81 @@ class OrchestratorAgent(ABC):
         
         Args:
             result: Result dictionary from AgentExecutor.invoke()
+            use_deep_inspection: If True, use more aggressive inspection methods
         
         Returns:
             str: Name of the selected agent ("finance_agent", "hr_agent", "tech_agent", or "unknown")
         """
         # Check intermediate steps if available
-        if "intermediate_steps" in result:
+        if "intermediate_steps" in result and result["intermediate_steps"]:
             for step in result["intermediate_steps"]:
                 if len(step) >= 2:
-                    tool_name = step[0].tool if hasattr(step[0], 'tool') else None
-                    if tool_name and tool_name in ["finance_agent", "hr_agent", "tech_agent"]:
-                        return tool_name
+                    # Try multiple ways to extract tool name
+                    tool_name = None
+                    action_obj = step[0]  # First element is usually the action
+                    
+                    # Method 1: Direct tool attribute (most common for AgentAction)
+                    if hasattr(action_obj, 'tool'):
+                        tool_name = action_obj.tool
+                    # Method 2: Check if it's an AgentAction with tool_input
+                    elif hasattr(action_obj, 'tool_input'):
+                        # This is likely an AgentAction - check for tool name
+                        if hasattr(action_obj, 'tool'):
+                            tool_name = action_obj.tool
+                    # Method 3: Check if it's a tuple with (action, observation)
+                    elif isinstance(action_obj, tuple) and len(action_obj) > 0:
+                        first_item = action_obj[0]
+                        if isinstance(first_item, str):
+                            tool_name = first_item
+                        elif hasattr(first_item, 'tool'):
+                            tool_name = first_item.tool
+                        elif hasattr(first_item, 'name'):
+                            tool_name = first_item.name
+                    # Method 4: Check if it's a dict-like object
+                    elif isinstance(action_obj, dict):
+                        tool_name = action_obj.get('tool') or action_obj.get('name') or action_obj.get('action')
+                    # Method 5: Try to get from the action object's name attribute
+                    elif hasattr(action_obj, 'name'):
+                        tool_name = action_obj.name
+                    
+                    # Normalize and check tool name
+                    if tool_name:
+                        tool_name = str(tool_name).strip()
+                        # Direct match
+                        if tool_name in ["finance_agent", "hr_agent", "tech_agent"]:
+                            return tool_name
+                        # Partial match (in case of variations)
+                        if "finance" in tool_name.lower():
+                            return "finance_agent"
+                        elif "hr" in tool_name.lower() or "human" in tool_name.lower():
+                            return "hr_agent"
+                        elif "tech" in tool_name.lower():
+                            return "tech_agent"
         
-        # Fallback: check if we can infer from the output
-        # (This is less reliable, but better than "unknown")
+        # Fallback: check if we can infer from the output content
         output = result.get("output", "").lower()
-        if "finance" in output or "expense" in output or "reimbursement" in output:
+        if "finance" in output or "expense" in output or "reimbursement" in output or "tax" in output or "vendor" in output:
             return "finance_agent"
-        elif "hr" in output or "vacation" in output or "payroll" in output:
+        elif "hr" in output or "vacation" in output or "payroll" in output or "employee" in output or "benefit" in output or "gift" in output:
             return "hr_agent"
-        elif "tech" in output or "network" in output or "vpn" in output:
+        elif "tech" in output or "network" in output or "vpn" in output or "internet" in output or "computer" in output or "password" in output:
             return "tech_agent"
+        
+        # Deep inspection: search the entire result structure as string
+        if use_deep_inspection:
+            result_str = str(result).lower()
+            if "finance_agent" in result_str or '"finance_agent"' in result_str:
+                return "finance_agent"
+            elif "hr_agent" in result_str or '"hr_agent"' in result_str:
+                return "hr_agent"
+            elif "tech_agent" in result_str or '"tech_agent"' in result_str:
+                return "tech_agent"
+        
+        # Log warning if we couldn't determine the agent
+        self.logger.warning(
+            "[ORCHESTRATOR] Could not determine selected agent from result. "
+            f"Intermediate steps available: {bool(result.get('intermediate_steps'))}"
+        )
         
         return "unknown"
 

@@ -11,14 +11,65 @@ import sys
 import os
 from pathlib import Path
 
+# Fix multiprocessing issues in Python 3.13
+# Disable multiprocessing in sentence-transformers to prevent crashes
+# This prevents warnings and potential deadlocks when the process is forked.
+# Hugging Face tokenizers use parallelism by default, but when a process forks
+# (which can happen with multiprocessing, some libraries, or system operations),
+# the tokenizer's parallel workers can cause deadlocks. For single-process
+# applications like this RAG system, disabling parallelism is safe and recommended.
+# This must be set before importing any Hugging Face libraries.
+os.environ["TOKENIZERS_PARALLELISM"] = "false"
+# Disable joblib multiprocessing
+os.environ["JOBLIB_MULTIPROCESSING"] = "0"
+# Set OMP threads to 1 to prevent OpenMP conflicts
+os.environ["OMP_NUM_THREADS"] = "1"
+
+# Suppress semaphore leak warnings (known issue in Python 3.13 with sentence-transformers)
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning, module="multiprocessing.resource_tracker")
+
 # Add project root to Python path to enable absolute imports
 project_root = Path(__file__).parent.parent
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from langchain_openai import ChatOpenAI
-from langchain_huggingface import HuggingFaceEmbeddings
-from langchain_community.vectorstores import FAISS, DistanceStrategy
+# Import HuggingFaceEmbeddings - use direct module import to avoid __init__.py issues
+import importlib.util
+import sys
+import os
+
+# Find langchain package path
+langchain_path = None
+for p in sys.path:
+    test_path = os.path.join(p, 'langchain', 'embeddings', 'huggingface.py')
+    if os.path.exists(test_path):
+        langchain_path = p
+        break
+
+if langchain_path:
+    # Direct import from file to bypass __init__.py
+    spec = importlib.util.spec_from_file_location(
+        "huggingface_embeddings",
+        os.path.join(langchain_path, 'langchain', 'embeddings', 'huggingface.py')
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    HuggingFaceEmbeddings = module.HuggingFaceEmbeddings
+else:
+    # Fallback: try normal import
+    try:
+        from langchain.embeddings.huggingface import HuggingFaceEmbeddings
+    except ImportError:
+        raise ImportError(
+            "Could not import HuggingFaceEmbeddings. "
+            "The direct file import failed and the normal import path is not available. "
+            "Please ensure langchain is properly installed."
+        )
+from langchain_community.vectorstores import FAISS
+# Note: DistanceStrategy is not available in langchain 0.0.350
+# FAISS will use cosine similarity automatically with normalized embeddings
 from langchain_community.document_loaders import (
     DirectoryLoader,
     TextLoader,
@@ -124,21 +175,45 @@ def initialize_vector_stores(embeddings: HuggingFaceEmbeddings):
     Returns:
         A dictionary with the vector stores for each domain where embeddings are normalized to L2 norm.
     """
-    finance_vector_store = FAISS.from_documents(
-        load_finance_docs(),
-        embeddings,
-        distance_strategy=DistanceStrategy.COSINE,
-    )
-    hr_vector_store = FAISS.from_documents(
-        load_hr_docs(),
-        embeddings,
-        distance_strategy=DistanceStrategy.COSINE,
-    )
-    tech_vector_store = FAISS.from_documents(
-        load_tech_docs(),
-        embeddings,
-        distance_strategy=DistanceStrategy.COSINE,
-    )
+    # Note: In langchain 0.0.350, FAISS.from_documents() doesn't support distance_strategy parameter
+    # Since embeddings are normalized, FAISS will automatically use cosine similarity (inner product)
+    # Embed documents in batches to avoid multiprocessing crashes in Python 3.13
+    try:
+        finance_docs = load_finance_docs()
+        print(f"  Loading {len(finance_docs)} finance documents...")
+        finance_vector_store = FAISS.from_documents(
+            finance_docs,
+            embeddings,
+        )
+        print(f"  ✓ Finance vector store created")
+    except Exception as e:
+        print(f"  ✗ Error creating finance vector store: {e}")
+        raise
+    
+    try:
+        hr_docs = load_hr_docs()
+        print(f"  Loading {len(hr_docs)} HR documents...")
+        hr_vector_store = FAISS.from_documents(
+            hr_docs,
+            embeddings,
+        )
+        print(f"  ✓ HR vector store created")
+    except Exception as e:
+        print(f"  ✗ Error creating HR vector store: {e}")
+        raise
+    
+    try:
+        tech_docs = load_tech_docs()
+        print(f"  Loading {len(tech_docs)} tech documents...")
+        tech_vector_store = FAISS.from_documents(
+            tech_docs,
+            embeddings,
+        )
+        print(f"  ✓ Tech vector store created")
+    except Exception as e:
+        print(f"  ✗ Error creating tech vector store: {e}")
+        raise
+    
     return {
         "finance": finance_vector_store,
         "hr": hr_vector_store,
@@ -159,7 +234,6 @@ def initialize_specialized_agents():
     """
     finance_agent = FinanceAgent(
         vector_store=vector_stores["finance"],
-        agent_name="finance",
         llm=llm,
         embeddings=embeddings,
         langfuse_client=langfuse_client,
@@ -168,7 +242,6 @@ def initialize_specialized_agents():
     print("✓ Finance agent initialized")
     hr_agent = HRAgent(
         vector_store=vector_stores["hr"],
-        agent_name="hr",
         llm=llm,
         embeddings=embeddings,
         langfuse_client=langfuse_client,
@@ -178,7 +251,6 @@ def initialize_specialized_agents():
     
     tech_agent = TechAgent(
         vector_store=vector_stores["tech"],
-        agent_name="tech",
         llm=llm,
         embeddings=embeddings,
         langfuse_client=langfuse_client,
@@ -241,65 +313,6 @@ def initialize_orchestrator(agents_dict: dict) -> OrchestratorAgent:
     )
     return orchestrator
 
-
-# ============================================================================
-# (5) Testing & Examples
-# ============================================================================
-# TODO: Create main function or class to run the system
-
-# TODO: Implement query processing function:
-#   - Accept user query
-#   - Pass to orchestrator
-#   - Handle orchestrator's routing decision
-#   - Receive response from specialized agent
-#   - Return final answer to user
-
-# TODO: Load test queries from test_queries.json
-
-# TODO: Create test runner that:
-#   - Iterates through test queries
-#   - Processes each query through the system
-#   - Logs results
-#   - Optionally runs evaluator for each response (bonus)
-
-# TODO: Add example usage:
-#   - Simple query example
-#   - Multi-turn conversation example
-#   - Error handling example
-
-# ============================================================================
-# (6) Langfuse Integration
-# ============================================================================
-# TODO: Initialize Langfuse client:
-#   - Set up Langfuse tracing
-#   - Configure callback handlers for LangChain
-
-# TODO: Add tracing to:
-#   - Orchestrator classification and routing decisions
-#   - Each agent's retrieval and generation steps
-#   - End-to-end query processing flow
-
-# TODO: Implement evaluator agent (BONUS):
-#   - Create EvaluatorAgent that scores responses (1-10)
-#   - Integrate with Langfuse evaluation system
-#   - Automatically evaluate each RAG response based on:
-#     * Original query
-#     * Final answer quality
-#     * Relevance, accuracy, completeness
-
-# TODO: Set up Langfuse dashboard configuration:
-#   - Project settings
-#   - Evaluation metrics
-#   - Trace visualization
-
-# ============================================================================
-# Main Execution
-# ============================================================================
-# TODO: Add if __name__ == "__main__": block
-# TODO: Initialize all components
-# TODO: Run test suite or interactive mode
-# TODO: Display results and traces in Langfuse
-
 if __name__ == "__main__":
     print("=" * 80)
     print("Multi-Agent RAG System - Initialization")
@@ -316,6 +329,9 @@ if __name__ == "__main__":
     
     # Initialize embeddings
     print("\n[2/6] Initializing embeddings...")
+    # Disable multiprocessing to avoid semaphore leaks in Python 3.13
+    # Set TOKENIZERS_PARALLELISM=false to prevent tokenizer multiprocessing warnings
+    os.environ["TOKENIZERS_PARALLELISM"] = "false"
     embeddings = HuggingFaceEmbeddings(
         model_name="all-MiniLM-L6-v2",
         model_kwargs={"device": "cpu"},
@@ -325,12 +341,36 @@ if __name__ == "__main__":
     
     # Initialize LLM
     print("\n[3/6] Initializing LLM...")
-    llm = ChatOpenAI(
-        temperature=0,
-        openai_api_key=OPENAI_API_KEY,
-        model_name="gpt-4o-mini"
-    )
-    print("✓ LLM initialized")
+    # if use open router, use the open router llm
+    use_open_router = os.getenv("USE_OPEN_ROUTER", "false").lower() == "true"
+    if use_open_router:
+        # For Open Router, use OPENROUTER_API_KEY or fallback to OPENAI_API_KEY
+        openrouter_key = os.getenv("OPENROUTER_API_KEY") or OPENAI_API_KEY
+        if not openrouter_key:
+            raise ValueError(
+                "Open Router requires an API key. Set OPENROUTER_API_KEY or OPENAI_API_KEY environment variable."
+            )
+        llm = ChatOpenAI(
+            temperature=0,
+            openai_api_key=openrouter_key,
+            base_url="https://openrouter.ai/api/v1",
+            model_name="openai/gpt-4o-mini",
+            # Open Router requires HTTP Referer header for some models
+            default_headers={
+                "HTTP-Referer": os.getenv("OPENROUTER_REFERER", "https://github.com/your-repo"),  # Optional
+                "X-Title": os.getenv("OPENROUTER_TITLE", "Multi-Agent RAG System")  # Optional
+            }
+        )
+        print("✓ LLM initialized (Open Router)")
+    else:
+        if not OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY environment variable is required for OpenAI API.")
+        llm = ChatOpenAI(
+            temperature=0,
+            openai_api_key=OPENAI_API_KEY,
+            model_name="gpt-4o-mini"
+        )
+        print("✓ LLM initialized (OpenAI)")
     
     # Initialize vector stores
     print("\n[4/6] Loading documents and initializing vector stores...")
@@ -350,43 +390,49 @@ if __name__ == "__main__":
     # Initialize specialized agents
     print("\n[5/6] Initializing specialized RAG agents...")
     agents_dict = initialize_specialized_agents()
+    
+    # Check evaluator status
+    if agents_dict["evaluator"] is not None:
+        print(f"  ✓ Evaluator enabled (Quality threshold: {agents_dict['evaluator'].quality_threshold}/10)")
+    else:
+        print("  ⚠ Evaluator disabled or not available")
 
     # Initialize orchestrator
     print("\n[6/6] Initializing orchestrator agent...")
     orchestrator = initialize_orchestrator(agents_dict)
     print("✓ Orchestrator agent initialized")
+    if orchestrator.enable_evaluation:
+        print("  ✓ Quality evaluation enabled in orchestrator")
     
     print("\n" + "=" * 80)
     print("System Ready! Running test queries...")
     print("=" * 80)
     
-    # Test queries covering different domains
-    test_queries = [
-        {
-            "query": "What is my vacation accrual rate?",
-            "expected_agent": "hr_agent",
-            "description": "HR query - vacation benefits"
-        },
-        {
-            "query": "What is the maximum meal reimbursement?",
-            "expected_agent": "finance_agent",
-            "description": "Finance query - expense policy"
-        },
-        {
-            "query": "I cannot connect to the internet, what should I do?",
-            "expected_agent": "tech_agent",
-            "description": "Tech query - network troubleshooting"
-        }
-    ]
-    
+    # Load test queries from test_queries.json (mandatory file)
+    test_queries_path = project_root / "test_queries.json"
+    try:
+        with open(test_queries_path, 'r') as f:
+            test_queries = json.load(f)
+        print(f"\n✓ Loaded {len(test_queries)} test queries from test_queries.json")
+    except FileNotFoundError:
+        print(f"\n✗ Error: test_queries.json is required but not found at {test_queries_path}")
+        print("  Please ensure test_queries.json exists in the project root directory.")
+        exit(1)
+    except json.JSONDecodeError as e:
+        print(f"\n✗ Error: Invalid JSON in test_queries.json: {str(e)}")
+        print("  Please fix the JSON syntax and try again.")
+        exit(1)
+        
     # Process each test query
     for i, test in enumerate(test_queries, 1):
         print(f"\n{'=' * 80}")
         print(f"Test Query {i}/{len(test_queries)}")
         print(f"{'=' * 80}")
         print(f"Query: {test['query']}")
-        print(f"Expected Agent: {test['expected_agent']}")
-        print(f"Description: {test['description']}")
+        if 'intent_category' in test:
+            print(f"Intent Category: {test['intent_category']}")
+        if 'edge_case' in test:
+            print(f"Edge Case: {test['edge_case']}")
         print(f"\nProcessing...")
         
         try:

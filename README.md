@@ -1,5 +1,49 @@
 # Multi-Agent RAG System
 
+## Quick Start
+
+### Requirements
+- Python 3.13 (compatible with Python 3.8+)
+- LangChain 0.0.350 (pinned for AgentExecutor compatibility)
+- OpenAI API key or Open Router API key
+
+### Installation
+```bash
+# Install dependencies
+uv pip install -r requirements.txt
+
+# Or with pip
+pip install -r requirements.txt
+```
+
+### Environment Variables
+Create a `.env` file with:
+```bash
+# Required
+OPENAI_API_KEY=your_openai_api_key_here
+
+# Optional: Use Open Router instead of OpenAI
+USE_OPEN_ROUTER=false
+OPENROUTER_API_KEY=your_openrouter_api_key_here  # Optional, falls back to OPENAI_API_KEY
+
+# Optional: Langfuse for tracing
+LANGFUSE_PUBLIC_KEY=your_langfuse_public_key
+LANGFUSE_SECRET_KEY=your_langfuse_secret_key
+LANGFUSE_HOST=https://cloud.langfuse.com
+
+# Optional: Vector search configuration
+USE_EXACT_KNN_SEARCH=false  # Set to true for exact k-NN (slower, 100% accurate)
+
+# Optional: Quality evaluation
+ENABLE_EVALUATION=true
+QUALITY_THRESHOLD=6.0
+```
+
+### Running
+```bash
+python src/multi_agent_system.py
+```
+
 ## Document Structure
 
 The system expects documents organized by domain in the `data/` directory:
@@ -208,6 +252,17 @@ Set environment variables to control evaluation:
 
 **Note**: The evaluator is optional. If the `evaluator.py` module is not available, the system will continue to work without evaluation.
 
+## Open Router Support
+
+The system supports Open Router as an alternative to OpenAI API:
+
+- Set `USE_OPEN_ROUTER=true` to enable Open Router
+- Uses `OPENROUTER_API_KEY` or falls back to `OPENAI_API_KEY`
+- Automatically uses `STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION` agent type (compatible with Open Router's tools format)
+- Model format: `openai/gpt-4o-mini` or other Open Router model identifiers
+
+**Note**: Open Router requires the newer `tools` format instead of deprecated `functions` format, so the orchestrator automatically switches agent types when Open Router is enabled.
+
 ## Known Limitations
 
 ### File Format Constraints
@@ -225,4 +280,36 @@ The system has strict file format requirements for each domain:
 - **Document Loaders**: Currently supports only specific file types (CSV, PDF, Markdown, Text). Additional formats require extending the loader function.
 - **Vector Store**: The system rebuilds vector stores with normalized vectors, which may take time for large document collections.
 - **Exact k-NN**: Best suited for small to medium datasets (<10,000 vectors) due to linear time complexity.
+- **LangChain Version**: Requires LangChain 0.0.350 (AgentExecutor was removed in 1.0.0+)
+- **Python 3.13**: Multiprocessing is disabled to prevent semaphore leaks (set via environment variables)
+
+## Technical Decisions
+
+### LangChain Components
+
+**LangChain 0.0.350**: Pinned to this version because `AgentExecutor` and `OpenAIFunctionsAgent` were removed in 1.0.0+. These components are essential for the orchestrator's function-calling routing mechanism.
+
+**AgentExecutor with max_iterations=5**: Limits agent execution to 5 iterations to prevent infinite loops when the LLM can't decide on a tool. Default was 15, which caused excessive retries.
+
+**RetrievalQA Chain**: Used instead of separate retrieval + generation steps to avoid duplicate retrieval and improve efficiency. The chain handles both operations atomically.
+
+**ChatPromptTemplate**: Chosen over `PromptTemplate` to support conversation history and multi-turn interactions via `MessagesPlaceholder`, required for `OPENAI_FUNCTIONS` agent type.
+
+### Routing Strategy
+
+**OpenAI Functions (OPENAI_FUNCTIONS)**: Used for OpenAI API to leverage native function-calling capabilities. The LLM outputs structured function calls that LangChain executes automatically.
+
+**Structured Chat ReAct (STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION)**: Used for Open Router because it supports the newer `tools` format (Open Router doesn't support deprecated `functions` format).
+
+**max_handoff_depth=3**: Prevents agent-to-agent ping-pong scenarios by limiting query handoffs to 3 maximum. This prevents infinite routing loops while allowing legitimate multi-agent collaboration.
+
+### RAG Configuration
+
+**FAISS with Cosine Similarity**: Uses cosine similarity (via normalized embeddings) for semantic search. Normalized embeddings (L2 norm=1) make inner product equivalent to cosine similarity, optimal for text similarity.
+
+**Normalized Embeddings**: All embeddings are normalized to L2 norm=1.0 before indexing, ensuring consistent cosine similarity calculations and eliminating the need for explicit distance strategy configuration.
+
+**Approximate Nearest Neighbors (A-NN) by Default**: Fast and scalable for production. Exact k-NN is available for small datasets where 100% accuracy is required, but A-NN provides 95-99% accuracy with much better performance.
+
+**Retriever with top_k=4-5**: Retrieves 4-5 documents per query, balancing context richness with response quality. HR agent uses 5 for complex policy queries, others use 4.
 
