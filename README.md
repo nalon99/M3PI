@@ -19,12 +19,13 @@ pip install -r requirements.txt
 ### Environment Variables
 Create a `.env` file with:
 ```bash
-# Required
-OPENAI_API_KEY=your_openai_api_key_here
+# Required: API Key (use OpenAI key or Open Router key depending on USE_OPEN_ROUTER setting)
+OPENAI_API_KEY=your_api_key_here
 
-# Optional: Use Open Router instead of OpenAI
+# Required: Provider selection
+# Set USE_OPEN_ROUTER=true if using Open Router (set OPENAI_API_KEY to your Open Router API key)
+# Set USE_OPEN_ROUTER=false if using OpenAI (set OPENAI_API_KEY to your OpenAI API key)
 USE_OPEN_ROUTER=false
-OPENROUTER_API_KEY=your_openrouter_api_key_here  # Optional, falls back to OPENAI_API_KEY
 
 # Optional: Langfuse for tracing
 LANGFUSE_PUBLIC_KEY=your_langfuse_public_key
@@ -256,12 +257,18 @@ Set environment variables to control evaluation:
 
 The system supports Open Router as an alternative to OpenAI API:
 
-- Set `USE_OPEN_ROUTER=true` to enable Open Router
-- Uses `OPENROUTER_API_KEY` or falls back to `OPENAI_API_KEY`
-- Automatically uses `STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION` agent type (compatible with Open Router's tools format)
-- Model format: `openai/gpt-4o-mini` or other Open Router model identifiers
+**To use Open Router:**
+- Set `USE_OPEN_ROUTER=true` in your `.env` file
+- Set `OPENAI_API_KEY` to your Open Router API key
 
-**Note**: Open Router requires the newer `tools` format instead of deprecated `functions` format, so the orchestrator automatically switches agent types when Open Router is enabled.
+**To use OpenAI:**
+- Set `USE_OPEN_ROUTER=false` in your `.env` file
+- Set `OPENAI_API_KEY` to your OpenAI API key
+
+**Technical Details:**
+- Automatically uses `STRUCTURED_CHAT_ZERO_SHOT_REACT_DESCRIPTION` agent type when Open Router is enabled (compatible with Open Router's tools format)
+- Model format: `openai/gpt-4o-mini` or other Open Router model identifiers
+- Open Router requires the newer `tools` format instead of deprecated `functions` format, so the orchestrator automatically switches agent types when Open Router is enabled
 
 ## Known Limitations
 

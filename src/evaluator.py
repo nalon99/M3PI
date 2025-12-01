@@ -206,12 +206,14 @@ class EvaluatorAgent:
                 metadata=metadata
             )
             
-            # Log evaluation result
+            # Log and print evaluation result
             status = "✓ ACCEPTABLE" if is_acceptable else "✗ LOW QUALITY"
-            self.logger.info(
+            score_message = (
                 f"[EVALUATOR] {status} - Overall Score: {overall_score:.1f}/10 "
                 f"(Relevance: {relevance_score}, Accuracy: {accuracy_score}, Completeness: {completeness_score})"
             )
+            self.logger.info(score_message)
+            print(score_message)  # Also print to console for visibility
             
             return evaluation_data
             

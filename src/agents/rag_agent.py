@@ -9,37 +9,28 @@ Contains common RAG logic: retrieval, generation, formatting, and error handling
 # ============================================================================
 from abc import ABC, abstractmethod
 from langchain_openai import ChatOpenAI
-# Import HuggingFaceEmbeddings - use direct module import to avoid __init__.py issues
+# Import HuggingFaceEmbeddings - direct file import to bypass __init__.py dependency issues
 import importlib.util
 import sys
 import os
 
-# Find langchain package path
-langchain_path = None
-for p in sys.path:
-    test_path = os.path.join(p, 'langchain', 'embeddings', 'huggingface.py')
+# Direct import from file to avoid langchain.embeddings.__init__.py dependency conflicts
+# This is necessary because langchain.embeddings.__init__.py imports OpenAIEmbeddings
+# which has compatibility issues with langchain_community in version 0.0.350
+langchain_embeddings_path = None
+for path in sys.path:
+    test_path = os.path.join(path, 'langchain', 'embeddings', 'huggingface.py')
     if os.path.exists(test_path):
-        langchain_path = p
+        langchain_embeddings_path = test_path
         break
 
-if langchain_path:
-    # Direct import from file to bypass __init__.py
-    spec = importlib.util.spec_from_file_location(
-        "huggingface_embeddings",
-        os.path.join(langchain_path, 'langchain', 'embeddings', 'huggingface.py')
-    )
+if langchain_embeddings_path:
+    spec = importlib.util.spec_from_file_location("huggingface_embeddings", langchain_embeddings_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     HuggingFaceEmbeddings = module.HuggingFaceEmbeddings
 else:
-    # Fallback: try normal import
-    try:
-        from langchain.embeddings.huggingface import HuggingFaceEmbeddings
-    except ImportError:
-        try:
-            from langchain_huggingface import HuggingFaceEmbeddings
-        except ImportError:
-            raise ImportError("Could not import HuggingFaceEmbeddings. Please install langchain or langchain-huggingface.")
+    raise ImportError("Could not find HuggingFaceEmbeddings module. Please ensure langchain is installed.")
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from langchain_community.vectorstores import FAISS

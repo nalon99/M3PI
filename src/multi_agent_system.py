@@ -35,38 +35,26 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from langchain_openai import ChatOpenAI
-# Import HuggingFaceEmbeddings - use direct module import to avoid __init__.py issues
+# Import HuggingFaceEmbeddings - direct file import to bypass __init__.py dependency issues
 import importlib.util
-import sys
-import os
 
-# Find langchain package path
-langchain_path = None
-for p in sys.path:
-    test_path = os.path.join(p, 'langchain', 'embeddings', 'huggingface.py')
+# Direct import from file to avoid langchain.embeddings.__init__.py dependency conflicts
+# This is necessary because langchain.embeddings.__init__.py imports OpenAIEmbeddings
+# which has compatibility issues with langchain_community in version 0.0.350
+langchain_embeddings_path = None
+for path in sys.path:
+    test_path = os.path.join(path, 'langchain', 'embeddings', 'huggingface.py')
     if os.path.exists(test_path):
-        langchain_path = p
+        langchain_embeddings_path = test_path
         break
 
-if langchain_path:
-    # Direct import from file to bypass __init__.py
-    spec = importlib.util.spec_from_file_location(
-        "huggingface_embeddings",
-        os.path.join(langchain_path, 'langchain', 'embeddings', 'huggingface.py')
-    )
+if langchain_embeddings_path:
+    spec = importlib.util.spec_from_file_location("huggingface_embeddings", langchain_embeddings_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     HuggingFaceEmbeddings = module.HuggingFaceEmbeddings
 else:
-    # Fallback: try normal import
-    try:
-        from langchain.embeddings.huggingface import HuggingFaceEmbeddings
-    except ImportError:
-        raise ImportError(
-            "Could not import HuggingFaceEmbeddings. "
-            "The direct file import failed and the normal import path is not available. "
-            "Please ensure langchain is properly installed."
-        )
+    raise ImportError("Could not find HuggingFaceEmbeddings module. Please ensure langchain is installed.")
 from langchain_community.vectorstores import FAISS
 # Note: DistanceStrategy is not available in langchain 0.0.350
 # FAISS will use cosine similarity automatically with normalized embeddings
@@ -95,8 +83,10 @@ except ImportError:
 
 
 # Set up environment variables:
-
-load_dotenv()
+# Load .env file from project root (not current working directory)
+# This ensures .env is found regardless of where the script is executed from
+# Use override=True to ensure .env values take precedence over shell environment variables
+load_dotenv(dotenv_path=project_root / ".env", override=True)
 
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 LANGFUSE_PUBLIC_KEY = os.getenv("LANGFUSE_PUBLIC_KEY")
@@ -341,30 +331,21 @@ if __name__ == "__main__":
     
     # Initialize LLM
     print("\n[3/6] Initializing LLM...")
-    # if use open router, use the open router llm
+    if not OPENAI_API_KEY:
+        raise ValueError("OPENAI_API_KEY environment variable is required.")
+    
     use_open_router = os.getenv("USE_OPEN_ROUTER", "false").lower() == "true"
     if use_open_router:
-        # For Open Router, use OPENROUTER_API_KEY or fallback to OPENAI_API_KEY
-        openrouter_key = os.getenv("OPENROUTER_API_KEY") or OPENAI_API_KEY
-        if not openrouter_key:
-            raise ValueError(
-                "Open Router requires an API key. Set OPENROUTER_API_KEY or OPENAI_API_KEY environment variable."
-            )
+        # Open Router configuration
         llm = ChatOpenAI(
             temperature=0,
-            openai_api_key=openrouter_key,
+            openai_api_key=OPENAI_API_KEY,
             base_url="https://openrouter.ai/api/v1",
             model_name="openai/gpt-4o-mini",
-            # Open Router requires HTTP Referer header for some models
-            default_headers={
-                "HTTP-Referer": os.getenv("OPENROUTER_REFERER", "https://github.com/your-repo"),  # Optional
-                "X-Title": os.getenv("OPENROUTER_TITLE", "Multi-Agent RAG System")  # Optional
-            }
         )
         print("✓ LLM initialized (Open Router)")
     else:
-        if not OPENAI_API_KEY:
-            raise ValueError("OPENAI_API_KEY environment variable is required for OpenAI API.")
+        # Standard OpenAI API
         llm = ChatOpenAI(
             temperature=0,
             openai_api_key=OPENAI_API_KEY,

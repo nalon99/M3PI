@@ -57,6 +57,11 @@ except ImportError:
     EVALUATOR_AVAILABLE = False
     EvaluatorAgent = None
 
+# Load environment variables from .env file
+# This ensures the orchestrator can access API keys regardless of where it's executed from
+from dotenv import load_dotenv
+load_dotenv(dotenv_path=project_root / ".env")
+
 langfuse = Langfuse(
     public_key=os.getenv("LANGFUSE_PUBLIC_KEY"),
     secret_key=os.getenv("LANGFUSE_SECRET_KEY"),
@@ -152,37 +157,37 @@ class OrchestratorAgent(ABC):
             evaluator: Optional EvaluatorAgent instance for quality monitoring
             enable_evaluation: Whether to enable automatic evaluation (default: False)
         """
+        # Initialize logging first (needed for LLM initialization logging)
+        self.logger = logging.getLogger(__name__)
+        
         # Initialize LLM
+        # Ensure .env is loaded (in case it wasn't loaded at module import time)
+        # Use override=True to ensure .env values take precedence over shell environment variables
+        load_dotenv(dotenv_path=project_root / ".env", override=True)
+        
+        # Get API key (user sets OPENAI_API_KEY to the appropriate key for their chosen provider)
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is required.")
+        
         use_open_router = os.getenv("USE_OPEN_ROUTER", "false").lower() == "true"
         if use_open_router:
-            # For Open Router, use OPENAI_API_KEY as the Open Router API key
-            # Open Router API key should be set in OPENAI_API_KEY or OPENROUTER_API_KEY
-            api_key = os.getenv("OPENROUTER_API_KEY") or os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError(
-                    "Open Router requires an API key. Set OPENROUTER_API_KEY or OPENAI_API_KEY environment variable."
-                )
+            # Open Router configuration
             self.llm = ChatOpenAI(
                 temperature=0,
                 openai_api_key=api_key,
                 base_url="https://openrouter.ai/api/v1",
-                model_name="openai/gpt-4o-mini",
-                # Open Router requires HTTP Referer header for some models
-                default_headers={
-                    "HTTP-Referer": os.getenv("OPENROUTER_REFERER", "https://github.com/your-repo"),  # Optional
-                    "X-Title": os.getenv("OPENROUTER_TITLE", "Multi-Agent RAG System")  # Optional
-                }
+                model_name="openai/gpt-4o-mini"
             )
+            self.logger.info(f"[ORCHESTRATOR] Using Open Router")
         else:
             # Standard OpenAI API
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise ValueError("OPENAI_API_KEY environment variable is required for OpenAI API.")
             self.llm = ChatOpenAI(
                 temperature=0,
                 openai_api_key=api_key,
                 model_name="gpt-4o-mini"
             )
+            self.logger.info(f"[ORCHESTRATOR] Using OpenAI")
         
         # Store specialized agents for tool creation
         self.finance_agent = finance_agent
@@ -191,9 +196,6 @@ class OrchestratorAgent(ABC):
         
         # Initialize Langfuse tracing (must be before tool creation)
         self.langfuse = langfuse
-        
-        # Initialize logging
-        self.logger = logging.getLogger(__name__)
         
         # Create tools from specialized agents with logging and tracing features
         self.tools = self._create_agent_tools()
@@ -590,7 +592,6 @@ class OrchestratorAgent(ABC):
             # Log successful routing with agent selection
             self.logger.info(f"[ORCHESTRATOR] Query routing completed successfully")
             self.logger.info(f"[ORCHESTRATOR] Selected agent: {selected_agent}")
-            self.logger.info(f"[ORCHESTRATOR] Response length: {len(answer)} characters")
             
             # Evaluate response quality (if evaluator is enabled)
             if self.enable_evaluation and self.evaluator:
@@ -614,11 +615,13 @@ class OrchestratorAgent(ABC):
                     is_acceptable = evaluation.get("is_acceptable", False)
                     
                     status = "✓ ACCEPTABLE" if is_acceptable else "✗ LOW QUALITY"
-                    self.logger.info(
+                    eval_message = (
                         f"[ORCHESTRATOR] Evaluation Result: {status} - "
                         f"Overall: {overall_score:.1f}/10 "
                         f"(Relevance: {relevance}, Accuracy: {accuracy}, Completeness: {completeness})"
                     )
+                    self.logger.info(eval_message)
+                    print(eval_message)  # Also print to console for visibility
                     
                     # Update trace with evaluation results
                     existing_metadata = trace.metadata if hasattr(trace, 'metadata') else {}
