@@ -7,6 +7,14 @@ Manages delegation, prevents duplicate handling, and tracks conversation handoff
 # ============================================================================
 # (1) Setup & Imports
 # ============================================================================
+import sys
+from pathlib import Path
+
+# Add project root to Python path to enable absolute imports
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from abc import ABC
 import os
 import json
@@ -15,7 +23,7 @@ from datetime import datetime
 from typing import Dict, Any, Optional, Tuple
 
 from langchain_openai import ChatOpenAI
-from langchain_core.utils.uuid import uuid7
+import uuid
 from langchain_core.tools import Tool
 from langchain_core.prompts import PromptTemplate, ChatPromptTemplate, MessagesPlaceholder
 from langchain.agents import AgentExecutor, create_openai_functions_agent
@@ -245,7 +253,7 @@ class OrchestratorAgent(ABC):
                 query_data = {
                     "query": query,
                     "context": {},
-                    "conversation_id": str(uuid7()),
+                    "conversation_id": str(uuid.uuid4()),
                     "timestamp": datetime.now().isoformat()
                 }
                 
@@ -372,7 +380,7 @@ class OrchestratorAgent(ABC):
         """Classifies the query into HR or TECH or FINANCE."""
         result = self.llm.invoke(
             f"Classify this query into 'HR' or 'TECH' or 'FINANCE' or 'UNKNOWN'. Respond with only one word:\n{query}",
-            config={"run_id": uuid7()},
+            config={"run_id": str(uuid.uuid4())},
         )
         category = result.content.strip().lower()
         # return one of: "finance", "hr", "tech", or "unknown"
@@ -409,7 +417,7 @@ class OrchestratorAgent(ABC):
             >>> response = orchestrator.route_query("What is my vacation accrual rate?")
             >>> # Langfuse will show: hr_agent_selected span within orchestrator_route_query trace
         """
-        run_id = str(uuid7())
+        run_id = str(uuid.uuid4())
         
         try:
             # Create top-level Langfuse trace for this routing operation

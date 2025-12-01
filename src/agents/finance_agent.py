@@ -7,6 +7,14 @@ Inherits from RAGAgent base class and adds finance-specific customization.
 # ============================================================================
 # (1) Setup & Imports
 # ============================================================================
+import sys
+from pathlib import Path
+
+# Add project root to Python path to enable absolute imports
+project_root = Path(__file__).parent.parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from langchain.prompts import PromptTemplate
 from langchain_community.vectorstores import FAISS
 from langchain_openai import ChatOpenAI, OpenAIEmbeddings

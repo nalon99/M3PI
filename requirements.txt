@@ -1,6 +1,6 @@
 # LangChain packages (Python 3.13 compatible)
-langchain>=0.3.0  # Main LangChain package (includes agents, memory, chains)
-langchain-core>=0.3.0  # Core LangChain functionality (includes uuid7)
+langchain>=0.3.0,<1.0.0  # Main LangChain package (includes agents, memory, chains) - pin to 0.x for AgentExecutor compatibility
+langchain-core>=0.3.0  # Core LangChain functionality
 langchain-openai>=0.2.0
 langchain-huggingface>=0.1.0
 langchain-community>=0.3.0

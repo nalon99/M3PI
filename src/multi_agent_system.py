@@ -7,6 +7,15 @@ This is the main entry point for the multi-agent system.
 # (1) Setup & Imports
 # ============================================================================
 
+import sys
+import os
+from pathlib import Path
+
+# Add project root to Python path to enable absolute imports
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
 from langchain_openai import ChatOpenAI
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS, DistanceStrategy
