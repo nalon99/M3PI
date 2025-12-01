@@ -1,0 +1,23 @@
+# LangChain packages (Python 3.13 compatible)
+langchain>=0.3.0  # Main LangChain package (includes agents, memory, chains)
+langchain-core>=0.3.0  # Core LangChain functionality (includes uuid7)
+langchain-openai>=0.2.0
+langchain-huggingface>=0.1.0
+langchain-community>=0.3.0
+
+# Vector store and embeddings (Python 3.13 compatible)
+faiss-cpu>=1.8.0  # Updated for Python 3.13 support
+sentence-transformers>=2.7.0  # Updated for Python 3.13 support
+
+# Document loaders dependencies
+pypdf>=4.0.0  # Updated version with Python 3.13 support
+
+# Langfuse for tracing and evaluation
+langfuse>=2.50.0  # Updated for Python 3.13 support
+
+# Environment variables
+python-dotenv>=1.0.1
+
+# Core dependencies (Python 3.13 compatible)
+numpy>=2.0.0  # NumPy 2.x supports Python 3.13
+

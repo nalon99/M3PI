@@ -1,0 +1,78 @@
+[
+    {
+      "query": "What is the maximum reimbursement amount for meals if I am traveling to a high-cost city, and can I buy alcohol?",
+      "intent_category": "Expense Policy/Numeric Retrieval",
+      "edge_case": "Tests retrieval of a specific numeric threshold ($75.00) and an explicit exclusion (alcohol)."
+    },
+    {
+      "query": "If I am submitting an expense report today, what is the latest date I should expect to be reimbursed?",
+      "intent_category": "Procedural Retrieval/Temporal Reasoning",
+      "edge_case": "Tests procedural knowledge (10 business days) and requires temporal calculation (though the RAG output is the procedure, the agent should state the rule)."
+    },
+    {
+      "query": "I am paying a vendor who did $750 worth of work last year. What tax form do I need to make sure they receive?",
+      "intent_category": "Taxation/Policy/Numeric Retrieval",
+      "edge_case": "Tests retrieval based on a numeric condition (over $600) and identifying the correct required tax form (Form 1099-NEC)."
+    },
+    {
+      "query": "If I received a gift from a vendor valued at $150, what action must I take?",
+      "intent_category": "Compliance/Policy/Exception Handling",
+      "edge_case": "Tests the policy limit ($100) and the necessary action for the exception (prohibited or needs immediate reporting)."
+    },
+    {
+      "query": "What is the policy for using non-approved software? Where should all approved software be listed?",
+      "intent_category": "Procurement/Compliance/Source Retrieval",
+      "edge_case": "Tests the compliance consequences (disciplinary action) and the location of the central management list (IT Asset Register)."
+    },
+    {
+        "query": "If I am a full-time regular employee and have been with the company for 7 years, what is my maximum annual vacation accrual rate, and what is the maximum number of days I can carry over into the next year?",
+        "intent_category": "Benefits/Vacation Accrual/Numeric Retrieval",
+        "edge_case": "Tests retrieval from a tiered structure (Years 6 through 10 is 15 days/year) and the specific carryover limit (twice the annual allotment) from two distinct sub-policies."
+      },
+      {
+        "query": "If I work a shift of exactly 11 hours, what are my meal and rest break requirements, and can I agree with my supervisor to skip the second meal period?",
+        "intent_category": "Scheduling/Breaks/Conditional Logic",
+        "edge_case": "Tests multiple rules in one query: first and second meal periods (5hr/10hr work time limits), rest break count (major fraction of 4 hours), and the conditional waiver for the second meal period (only if the first was NOT waived)."
+      },
+      {
+        "query": "I am a non-exempt employee. If I work 13 hours on a single Tuesday, how are my overtime hours calculated for that day?",
+        "intent_category": "Payroll/Overtime Calculation/Numeric",
+        "edge_case": "Tests the complex California overtime rule set: 1.5x pay for hours 8-12, and 2x pay for all hours exceeding 12 in one workday."
+      },
+      {
+        "query": "What is the procedure if I notice an error on my pay stub, and who should I report it to if I suspect my manager is pressuring me not to take my legally mandated meal breaks?",
+        "intent_category": "Compliance/Reporting Procedure/Conflict",
+        "edge_case": "Tests two separate reporting paths: one for a general pay correction (to the [TITLE]) and a more sensitive one for management coercion (to Human Resources or senior management)."
+      },
+      {
+        "query": "How many days after I submit a request can I expect to receive access to my personnel file, and am I allowed to view my employment references?",
+        "intent_category": "Personnel File Access/Temporal/Exclusion Policy",
+        "edge_case": "Tests the specific legal time limit for access (no later than 30 days) and the explicit list of excluded documents (references, criminal investigations, etc.)."
+      },
+      {
+        "query": "I cannot access the internet on my computer. I'm connected to the wired network, but the status is 'Unidentified Network'. What are the two primary troubleshooting steps related to the cable or port?",
+        "intent_category": "Network/Connectivity/Troubleshooting",
+        "edge_case": "Tests retrieval of two distinct, sequential diagnostic steps (check cable security and try swapping the cable/port)."
+      },
+      {
+        "query": "I am traveling and need VPN access. After connecting, I cannot reach a file share. What specific naming convention must I use to access it?",
+        "intent_category": "Network/VPN/Procedure",
+        "edge_case": "Tests the specific technical requirement/solution: using the Fully Qualified Domain Name (FQDN) instead of the local name."
+      },
+      {
+        "query": "How frequently must I change my Active Directory password, and what is the mandatory minimum length requirement?",
+        "intent_category": "Security/Password Policy/Numeric Retrieval",
+        "edge_case": "Tests retrieval of two separate numeric compliance requirements (90 days and 12+ characters) from the same policy."
+      },
+      {
+        "query": "My account is currently locked out. What is the total duration of the lockout, and how many failed login attempts caused it?",
+        "intent_category": "Security/Account Management/Numeric Retrieval",
+        "edge_case": "Tests retrieval of both the time duration (30 minutes) and the numeric trigger threshold (5 failed attempts) for a security event."
+      },
+      {
+        "query": "If I need a license for new software that is not in the Software Center, what is the ticket category to use, and what is mandatory to include in the submission?",
+        "intent_category": "Software/Procurement/Forms & Justification",
+        "edge_case": "Tests retrieving the specific ticket form ('Software Procurement Request') and the three mandatory justification details (name, vendor, detailed business case)."
+      }
+  
+  ]
